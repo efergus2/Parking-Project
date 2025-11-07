@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Campus Parking — Interactive Map</title>
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial}
+  #container{
+    width:100vw;
+    height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:#111;
+  }
+  .map-wrap{
+    position:relative;
+    max-width:1400px;
+    width:95vw;
+    height:auto;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+    border-radius:6px;
+    overflow:hidden;
+    background: #fff;
+  }
+  img#mapImage{
+    display:block;
+    width:100%;
+    height:auto;
+  }
+  svg#overlay{
+    position:absolute;
+    left:0; top:0;
+    width:100%;
+    height:100%;
+    pointer-events:none;
+  }
+  .lot {
+    fill: rgba(0,150,255,0.12);
+    stroke: rgba(0,150,255,0.35);
+    stroke-width:2;
+    cursor:pointer;
+    pointer-events:auto;
+    transition: fill .12s, stroke .12s;
+  }
+  .lot:hover { fill: rgba(0,150,255,0.22); stroke: rgba(0,150,255,0.6); }
+  .status-open{ fill: rgba(0,200,80,0.16); stroke: rgba(0,200,80,0.5);}
+  .status-limited{ fill: rgba(255,180,0,0.12); stroke: rgba(255,160,0,0.45);}
+  .status-full{ fill: rgba(220,40,40,0.12); stroke: rgba(220,40,40,0.45); }
+
+  #popup {
+    position:fixed;
+    z-index: 9999;
+    background: #fff;
+    color:#111;
+    border-radius:8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    padding:12px 14px;
+    min-width:200px;
+    display:none;
+    font-size:14px;
+  }
+  #popup h4{ margin:0 0 6px 0; font-size:15px }
+  #popup small{ color:#666; display:block; margin-top:6px }
+  #closeBtn{ background:none;border:0;color:#888;cursor:pointer;font-size:18px; position:absolute; right:8px; top:6px }
+
+  .legend{
+    position: absolute;
+    right:8px;
+    bottom:8px;
+    background: rgba(255,255,255,0.95);
+    padding:8px 10px;
+    border-radius:6px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+    font-size:13px;
+  }
+  .legend .item{ display:flex; gap:8px; align-items:center; margin:4px 0}
+  .legend .swatch{ width:14px; height:12px; border-radius:2px; display:inline-block }
+  .sw-open{ background: rgba(0,200,80,0.5); }
+  .sw-limited{ background: rgba(255,160,0,0.5); }
+  .sw-full{ background: rgba(220,40,40,0.5); }
+</style>
+</head>
+<body>
+<div id="container">
+  <div class="map-wrap" id="mapWrap">
+    <!-- Put your map image here and name it "map.png" or change the src -->
+    <img id="mapImage" src="map.png" alt="Campus parking map">
+
+    <!-- Edit the viewBox to match your image pixel dimensions for easier coordinate editing.
+         Current viewBox is 0 0 1200 800 and polygons below are placeholders. -->
+    <svg id="overlay" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <!-- Placeholder polygons - replace points with accurate coords -->
+      <polygon id="lot-A" class="lot" data-lotid="A" points="100,100 240,90 260,170 120,190" />
+      <polygon id="lot-B" class="lot" data-lotid="B" points="300,120 420,110 430,190 320,210" />
+      <polygon id="lot-C" class="lot" data-lotid="C" points="520,70 660,80 660,150 540,160" />
+      <polygon id="lot-D" class="lot" data-lotid="D" points="160,260 280,250 300,330 180,350" />
+      <polygon id="lot-E" class="lot" data-lotid="E" points="420,260 560,260 560,340 430,360" />
+      <polygon id="lot-F" class="lot" data-lotid="F" points="680,240 840,240 840,320 700,340" />
+    </svg>
+
+    <div class="legend" aria-hidden="true">
+      <div style="font-weight:600">Legend</div>
+      <div class="item"><span class="swatch sw-open"></span> Open</div>
+      <div class="item"><span class="swatch sw-limited"></span> Limited</div>
+      <div class="item"><span class="swatch sw-full"></span> Full</div>
+    </div>
+  </div>
+
+  <div id="popup" role="dialog" aria-modal="false">
+    <button id="closeBtn" title="Close">&times;</button>
+    <h4 id="popupTitle">Lot</h4>
+    <div id="popupBody">Loading…</div>
+    <small id="popupUpdated">Updated: —</small>
+  </div>
+</div>
+
+<script>
+
+const API_BASE = ''; // empty since backend serves frontend; endpoints: /api/...
+const popup = document.getElementById('popup');
+const popupTitle = document.getElementById('popupTitle');
+const popupBody = document.getElementById('popupBody');
+const popupUpdated = document.getElementById('popupUpdated');
+const closeBtn = document.getElementById('closeBtn');
+
+function setLotAppearance(lotElem, data) {
+  lotElem.classList.remove('status-open','status-limited','status-full');
+  if (data.open_spaces <= 0) lotElem.classList.add('status-full');
+  else {
+    const pct = data.open_spaces / Math.max(1, data.capacity);
+    if (pct <= 0.1) lotElem.classList.add('status-limited');
+    else lotElem.classList.add('status-open');
+  }
+}
+
+/* Fetch all lots and color shapes */
+async function refreshAll() {
+  try {
+    const res = await fetch(API_BASE + '/api/lots');
+    if (!res.ok) throw new Error('network');
+    const obj = await res.json();
+    Object.values(obj).forEach(lot => {
+      const el = document.querySelector(`[data-lotid="${lot.id}"]`);
+      if (el) setLotAppearance(el, lot);
+    });
+    // cache last data (optional)
+    window.__lotCache = obj;
+  } catch (err) {
+    console.warn('Failed to refresh lots', err);
+  }
+}
+
+/* show popup for lot */
+function positionPopupAt(x, y) {
+  const pad = 8;
+  popup.style.display = 'block';
+  popup.style.left = (x + 12) + 'px';
+  popup.style.top = (y + 12) + 'px';
+  const rect = popup.getBoundingClientRect();
+  if (rect.right > window.innerWidth - pad) {
+    popup.style.left = (x - rect.width - 12) + 'px';
+  }
+  if (rect.bottom > window.innerHeight - pad) {
+    popup.style.top = (y - rect.height - 12) + 'px';
+  }
+}
+
+function showPopupForLot(lotId, clientX, clientY) {
+  const cache = window.__lotCache || {};
+  const data = cache[lotId];
+  if (data) {
+    renderPopup(data, clientX, clientY);
+    return;
+  }
+  // fallback: call single-lot endpoint
+  fetch(API_BASE + '/api/lot/' + lotId)
+    .then(r => r.json())
+    .then(data => renderPopup(data, clientX, clientY))
+    .catch(err => {
+      popupTitle.textContent = 'Unknown lot';
+      popupBody.innerHTML = '<div>No data available for this lot.</div>';
+      popupUpdated.textContent = 'Updated: —';
+      positionPopupAt(clientX, clientY);
+    });
+}
+
+function renderPopup(data, clientX, clientY) {
+  popupTitle.textContent = data.name || `Lot ${data.id}`;
+  popupBody.innerHTML = `
+    <div><strong>Capacity:</strong> ${data.capacity}</div>
+    <div><strong>Open spaces:</strong> ${data.open_spaces}</div>
+    <div style="margin-top:6px">${data.note ? `<em>${data.note}</em>` : ''}</div>
+  `;
+  popupUpdated.textContent = 'Updated: ' + (new Date(data.last_updated)).toLocaleString();
+  positionPopupAt(clientX, clientY);
+}
+
+/* attach handlers */
+document.querySelectorAll('.lot').forEach(el => {
+  el.setAttribute('tabindex', '0');
+  el.addEventListener('click', e => {
+    const lotid = el.dataset.lotid;
+    showPopupForLot(lotid, e.clientX, e.clientY);
+  });
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      const rect = el.getBoundingClientRect();
+      showPopupForLot(el.dataset.lotid, rect.left + rect.width/2, rect.top + rect.height/2);
+      e.preventDefault();
+    }
+  });
+});
+
+closeBtn.addEventListener('click', () => popup.style.display = 'none');
+window.addEventListener('resize', () => popup.style.display = 'none');
+window.addEventListener('scroll', () => popup.style.display = 'none');
+
+/* initial refresh and periodic polling */
+refreshAll();
+setInterval(refreshAll, 15000); // every 15s
+
+
+(() => {
+  const svg = document.getElementById('overlay');
+  if (!svg) return;
+
+  // UI container
+  const ctrl = document.createElement('div');
+  Object.assign(ctrl.style, {
+    position: 'fixed', left: '12px', top: '12px', zIndex: 99999,
+    background: 'rgba(255,255,255,0.97)', padding: '8px', borderRadius: '8px',
+    boxShadow: '0 8px 20px rgba(0,0,0,0.15)', fontSize: '13px'
+  });
+  ctrl.innerHTML = `
+    <label style="display:inline-flex;align-items:center;gap:8px">
+      <input id="editToggle" type="checkbox"> Edit mode
+    </label>
+    <button id="vertexToggle" title="Toggle vertex handles (V)" style="margin-left:8px">Vertices</button>
+    <button id="exportBtn" style="margin-left:8px">Export</button>
+    <button id="copyBtn" style="margin-left:6px">Copy</button>
+    <div id="selInfo" style="margin-top:6px;font-weight:600"></div>
+    <div style="font-size:11px;margin-top:6px;color:#444">
+      Ctrl+Click to add vertex · Select handle + Delete to remove · Shift+Arrow = 5px nudge
+    </div>
+  `;
+  document.body.appendChild(ctrl);
+
+  const editToggle = ctrl.querySelector('#editToggle');
+  const vertexToggle = ctrl.querySelector('#vertexToggle');
+  const exportBtn = ctrl.querySelector('#exportBtn');
+  const copyBtn = ctrl.querySelector('#copyBtn');
+  const selInfo = ctrl.querySelector('#selInfo');
+
+  // helper parse/format
+  const parsePoints = (str) => str.trim().split(/\s+/).map(p => p.split(',').map(Number));
+  const pointsToString = (arr) => arr.map(p => `${+p[0].toFixed(1)},${+p[1].toFixed(1)}`).join(' ');
+
+  // svg <circle> handles container
+  let handlesGroup = null;
+  function ensureHandlesGroup(){
+    if (!handlesGroup) {
+      handlesGroup = document.createElementNS('http://www.w3.org/2000/svg','g');
+      handlesGroup.setAttribute('id','vertex-handles-group');
+      svg.appendChild(handlesGroup);
+    }
+  }
+  function clearHandles(){ if (handlesGroup) { handlesGroup.innerHTML = ''; } }
+
+  // coordinate transforms
+  function toSvgPoint(clientX, clientY){
+    const pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  }
+  function screenFromSvg(x,y){
+    const pt = svg.createSVGPoint(); pt.x = x; pt.y = y;
+    const screen = pt.matrixTransform(svg.getScreenCTM());
+    return { x: screen.x, y: screen.y };
+  }
+
+  // state
+  let selected = null;           // selected polygon element
+  let dragging = false;          // dragging whole polygon
+  let dragStart = null;          // start mouse svg point
+  let originalPoints = null;     // original string
+  let handlesVisible = false;
+  let activeHandle = null;       // the <circle> being dragged / selected
+  let activeHandleIdx = -1;      // index of vertex for activeHandle
+
+  // utils for polygon-manip
+  function setSelection(el){
+    if (selected) selected.classList.remove('selected');
+    selected = el;
+    if (selected) selected.classList.add('selected');
+    selInfo.textContent = selected ? `Selected: ${selected.dataset.lotid || selected.id}` : '';
+    updateHandlesVisibility();
+  }
+
+  function updateHandlesVisibility(){
+    if (!selected || !editToggle.checked || !handlesVisible) {
+      clearHandles(); return;
+    }
+    renderHandlesFor(selected);
+  }
+
+  // render vertex handles for a polygon
+  function renderHandlesFor(polygon){
+    ensureHandlesGroup();
+    clearHandles();
+    const pts = parsePoints(polygon.getAttribute('points'));
+    pts.forEach((pt, idx) => {
+      const c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      c.setAttribute('cx', pt[0]); c.setAttribute('cy', pt[1]);
+      c.setAttribute('r', 6);
+      c.setAttribute('fill', '#fff');
+      c.setAttribute('stroke', '#2b9eea');
+      c.setAttribute('stroke-width', 2);
+      c.setAttribute('class', 'vhandle');
+      c.dataset.idx = idx;
+      c.style.cursor = 'move';
+      // pointer events must be enabled
+      c.style.pointerEvents = 'auto';
+      // append to group so they overlay polygon
+      handlesGroup.appendChild(c);
+    });
+  }
+
+  // whole-polygon move
+  svg.addEventListener('mousedown', (ev) => {
+    if (!editToggle.checked) return;
+    const target = ev.target;
+    if (target === svg) { // click background clears selection
+      if (!ev.ctrlKey) setSelection(null);
+      return;
+    }
+    if (target.classList && target.classList.contains('lot')) {
+      // start drag whole polygon
+      setSelection(target);
+      dragging = true;
+      dragStart = toSvgPoint(ev.clientX, ev.clientY);
+      originalPoints = selected.getAttribute('points');
+      ev.preventDefault();
+      return;
+    }
+    // otherwise if it's a handle, let handle mousedown manage it
+  });
+
+  window.addEventListener('mousemove', (ev) => {
+    if (activeHandle) {
+      // dragging a vertex handle
+      const p = toSvgPoint(ev.clientX, ev.clientY);
+      // update handle circle
+      activeHandle.setAttribute('cx', p.x);
+      activeHandle.setAttribute('cy', p.y);
+      // update polygon vertex
+      const pts = parsePoints(selected.getAttribute('points'));
+      pts[activeHandleIdx] = [p.x, p.y];
+      selected.setAttribute('points', pointsToString(pts));
+      ev.preventDefault();
+      return;
+    }
+    if (!dragging) return;
+    // move whole polygon (based on originalPoints)
+    const cur = toSvgPoint(ev.clientX, ev.clientY);
+    const dx = cur.x - dragStart.x;
+    const dy = cur.y - dragStart.y;
+    const pts = parsePoints(originalPoints);
+    const moved = pts.map(([x,y]) => [x+dx, y+dy]);
+    selected.setAttribute('points', pointsToString(moved));
+    updateHandlesVisibility();
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (activeHandle) {
+      activeHandle = null; activeHandleIdx = -1;
+    }
+    dragging = false;
+  });
+
+  // handle mousedown via event delegation on handlesGroup
+  svg.addEventListener('mousedown', (ev) => {
+    if (!editToggle.checked) return;
+    const t = ev.target;
+    if (t && t.classList && t.classList.contains('vhandle')) {
+      // begin vertex drag
+      activeHandle = t;
+      activeHandleIdx = Number(t.dataset.idx);
+      // make sure its owner polygon is selected
+      // (selected already set when clicking polygon; but ctrl+click may have selected null)
+      ev.preventDefault(); ev.stopPropagation();
+      return;
+    }
+  }, true);
+
+  // toggle vertex visibility (button & V)
+  vertexToggle.addEventListener('click', () => {
+    handlesVisible = !handlesVisible;
+    updateHandlesVisibility();
+    vertexToggle.textContent = handlesVisible ? 'Vertices ✓' : 'Vertices';
+  });
+
+  window.addEventListener('keydown', (ev) => {
+    if (!editToggle.checked) return;
+    // key V toggles handles
+    if (ev.key === 'v' || ev.key === 'V') {
+      ev.preventDefault();
+      handlesVisible = !handlesVisible;
+      updateHandlesVisibility();
+      vertexToggle.textContent = handlesVisible ? 'Vertices ✓' : 'Vertices';
+      return;
+    }
+
+    // delete selected handle vertex
+    if (ev.key === 'Delete' || ev.key === 'Backspace') {
+      if (activeHandle && selected) {
+        const pts = parsePoints(selected.getAttribute('points'));
+        if (pts.length <= 3) {
+          selInfo.textContent = 'Polygon needs at least 3 vertices';
+          return;
+        }
+        pts.splice(activeHandleIdx, 1);
+        selected.setAttribute('points', pointsToString(pts));
+        // regenerate handles and clear activeHandle
+        updateHandlesVisibility();
+        activeHandle = null; activeHandleIdx = -1;
+      }
+      return;
+    }
+
+    // Arrow nudging for whole polygon or active handle
+    const step = ev.shiftKey ? 5 : 1;
+    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(ev.key)) {
+      ev.preventDefault();
+      let dx=0, dy=0;
+      if (ev.key === 'ArrowLeft') dx = -step;
+      if (ev.key === 'ArrowRight') dx = step;
+      if (ev.key === 'ArrowUp') dy = -step;
+      if (ev.key === 'ArrowDown') dy = step;
+      if (activeHandle && selected) {
+        // nudge the active vertex in svg coordinates:
+        // compute small movement in svg space: map screen delta to svg delta
+        // approximate by converting small screen offset to svg
+        const s0 = screenFromSvg(Number(activeHandle.getAttribute('cx')), Number(activeHandle.getAttribute('cy')));
+        const s1 = { x: s0.x + dx, y: s0.y + dy };
+        const p0 = toSvgPoint(s0.x, s0.y);
+        const p1 = toSvgPoint(s1.x, s1.y);
+        const ddx = p1.x - p0.x, ddy = p1.y - p0.y;
+        const pts = parsePoints(selected.getAttribute('points'));
+        pts[activeHandleIdx] = [pts[activeHandleIdx][0] + ddx, pts[activeHandleIdx][1] + ddy];
+        selected.setAttribute('points', pointsToString(pts));
+        updateHandlesVisibility();
+      } else if (selected) {
+        // nudge whole polygon
+        const pts = parsePoints(selected.getAttribute('points'));
+        // convert screen dx to svg
+        const sref = screenFromSvg(0,0);
+        const sref2 = { x: sref.x + dx, y: sref.y + dy };
+        const pref = toSvgPoint(sref.x, sref.y);
+        const pref2 = toSvgPoint(sref2.x, sref2.y);
+        const ddx = pref2.x - pref.x, ddy = pref2.y - pref.y;
+        const moved = pts.map(([x,y]) => [x + ddx, y + ddy]);
+        selected.setAttribute('points', pointsToString(moved));
+        updateHandlesVisibility();
+      }
+      return;
+    }
+  });
+
+  // Ctrl+Click on polygon to insert a vertex on nearest edge
+  svg.addEventListener('click', (ev) => {
+    if (!editToggle.checked) return;
+    if (!ev.ctrlKey) return;
+    const t = ev.target;
+    if (!t.classList || !t.classList.contains('lot')) return;
+    setSelection(t);
+    const p = toSvgPoint(ev.clientX, ev.clientY);
+    insertVertexAtClosestEdge(selected, [p.x, p.y]);
+    updateHandlesVisibility();
+  });
+
+  function insertVertexAtClosestEdge(polygon, pt){
+    const pts = parsePoints(polygon.getAttribute('points'));
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i=0;i<pts.length;i++){
+      const a = pts[i];
+      const b = pts[(i+1)%pts.length];
+      const proj = projectPointOnSegment(pt, a, b);
+      const dx = proj[0]-pt[0], dy = proj[1]-pt[1];
+      const d = Math.hypot(dx, dy);
+      if (d < bestDist) { bestDist = d; bestIdx = i+1; }
+    }
+    pts.splice(bestIdx, 0, pt);
+    polygon.setAttribute('points', pointsToString(pts));
+  }
+
+  // project point p onto segment ab (returns closest point)
+  function projectPointOnSegment(p, a, b){
+    const ax = a[0], ay = a[1], bx = b[0], by = b[1];
+    const vx = bx-ax, vy = by-ay;
+    const wx = p[0]-ax, wy = p[1]-ay;
+    const c = (vx*wx + vy*wy) / (vx*vx + vy*vy || 1);
+    const t = Math.max(0, Math.min(1, c));
+    return [ax + vx*t, ay + vy*t];
+  }
+
+  // Clicking a handle should select it (so Delete / arrow applies)
+  // Use event delegation: mousedown on handlesGroup already sets activeHandle via earlier logic,
+  // but we also want click-to-select (without dragging)
+  svg.addEventListener('click', (ev) => {
+    if (!editToggle.checked) return;
+    const t = ev.target;
+    if (t && t.classList && t.classList.contains('vhandle')) {
+      activeHandle = t;
+      activeHandleIdx = Number(t.dataset.idx);
+      // focus visual cue
+      Array.from(document.querySelectorAll('.vhandle')).forEach(h => h.setAttribute('stroke','#2b9eea'));
+      activeHandle.setAttribute('stroke','#ff6b6b');
+      ev.stopPropagation();
+    }
+  });
+
+  // regenerate handles on selection change and when polygons change (mutation observer)
+  const observer = new MutationObserver(() => updateHandlesVisibility());
+  observer.observe(svg, { attributes: true, subtree: true, attributeFilter: ['points'] });
+
+  // clicking polygon selects it (if editToggle is on)
+  svg.addEventListener('click', (ev) => {
+    if (!editToggle.checked) return;
+    const t = ev.target;
+    if (t.classList && t.classList.contains('lot')) {
+      setSelection(t);
+    }
+  });
+
+  // Export & Copy
+  exportBtn.addEventListener('click', () => {
+    const out = {};
+    document.querySelectorAll('.lot').forEach(el => out[el.dataset.lotid || el.id] = el.getAttribute('points'));
+    console.log('Polygon export:', out);
+    selInfo.textContent = 'Exported to console';
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    const lines = [];
+    document.querySelectorAll('.lot').forEach(el => {
+      const id = el.dataset.lotid || el.id;
+      const cls = el.getAttribute('class') || 'lot';
+      const pts = el.getAttribute('points');
+      const tabindex = el.getAttribute('tabindex') || '0';
+      lines.push(`<polygon id="${id}" class="${cls}" data-lotid="${id}" tabindex="${tabindex}" points="${pts}" />`);
+    });
+    const text = lines.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      selInfo.textContent = 'Copied polygon tags to clipboard';
+    } catch(e) {
+      selInfo.textContent = 'Copy failed — check console';
+      console.log(text);
+    }
+  });
+
+  // show handles when edit mode turned on/off
+  editToggle.addEventListener('change', () => {
+    if (!editToggle.checked) {
+      clearHandles();
+      handlesVisible = false;
+      vertexToggle.textContent = 'Vertices';
+      setSelection(null);
+    } else {
+      // keep selection if any
+      updateHandlesVisibility();
+    }
+  });
+
+  // also make polygons keyboard-focusable if not already
+  document.querySelectorAll('.lot').forEach(el => {
+    if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex','0');
+  });
+
+  // style cues
+  const style = document.createElement('style');
+  style.textContent = `
+    .lot.selected { filter: drop-shadow(0 8px 18px rgba(0,0,0,0.35)); stroke-width:3; }
+    .vhandle { pointer-events:auto; }
+  `;
+  document.head.appendChild(style);
+
+  // initial message
+  selInfo.textContent = 'Toggle Edit mode then click a lot. Press "V" to show vertices.';
+})();
+</script>
+</body>
+</html>
