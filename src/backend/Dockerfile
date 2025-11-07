@@ -1,18 +1,27 @@
 # parking-project/backend/Dockerfile
 FROM node:18-alpine
+
+# Install bash, MySQL server, and required tools
+RUN apk add --no-cache bash mysql mysql-client
+
 WORKDIR /usr/src/app
 
-# copy only package.json first for layer caching
+# Copy package.json and install deps
 COPY package.json ./
-
-# install production deps without dev deps (no package-lock required)
 RUN npm install --omit=dev --no-audit --no-fund
 
-# copy app source
+# Copy app source
 COPY server.js ./
 
-# expose port
-EXPOSE 3000
+# Copy SQL initialization script
+COPY ../mysql/init.sql /init.sql
 
-CMD ["node", "server.js"]
+# Copy startup script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
 
+# Expose Node and MySQL ports
+EXPOSE 3000 3306
+
+# Start both MySQL and Node
+CMD ["/start.sh"]
