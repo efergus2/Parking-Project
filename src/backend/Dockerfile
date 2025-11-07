@@ -1,20 +1,22 @@
-# parking-project/backend/Dockerfile
-FROM node:18-alpine
+# Use Debian-based Node image to avoid MariaDB/Alpine issues
+FROM node:18-bullseye
 
-# Install bash, MySQL server, and required tools
-RUN apk add --no-cache bash mysql mysql-client
+# Install MySQL server and bash
+RUN apt-get update && \
+    apt-get install -y mysql-server bash && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
 
-# Copy package.json and install deps
+# Copy package.json and install production dependencies
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
 
-# Copy app source
+# Copy Node app source
 COPY server.js ./
 
 # Copy SQL initialization script
-COPY ../mysql/init.sql /init.sql
+COPY mysql/init.sql /init.sql
 
 # Copy startup script
 COPY start.sh /start.sh
