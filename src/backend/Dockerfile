@@ -16,6 +16,9 @@ RUN npm install --omit=dev --no-audit --no-fund
 # Copy Node app source
 COPY server.js ./
 
+# Copy frontend public folder
+COPY ../frontend/public /usr/src/app/public
+
 # Copy SQL initialization script
 COPY mysql/init.sql /init.sql
 
