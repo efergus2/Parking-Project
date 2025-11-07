@@ -1,13 +1,17 @@
 #!/bin/bash
 set -e
 
+# Ensure MariaDB directories exist
+mkdir -p /run/mysqld
+chown -R mysql:mysql /run/mysqld /var/lib/mysql
+
 # Initialize MariaDB data directory if empty
 if [ ! -d "/var/lib/mysql/mysql" ]; then
     echo "Initializing MariaDB data directory..."
     mariadb-install-db --user=mysql --datadir=/var/lib/mysql
 fi
 
-# Start MariaDB in the background
+# Start MariaDB in background
 echo "Starting MariaDB..."
 mariadbd --user=mysql --datadir=/var/lib/mysql &
 
@@ -26,6 +30,6 @@ mysql -e "FLUSH PRIVILEGES;"
 # Import initial SQL
 mysql parkingdb < /init.sql
 
-# Start Node app
+# Start Node server
 echo "Starting Node server..."
 node server.js
