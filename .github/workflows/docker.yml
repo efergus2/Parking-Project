@@ -1,4 +1,4 @@
-name: Build and Push Docker images to Docker Hub
+name: Build and Push Single Docker image (Node + MySQL)
 
 on:
   push:
@@ -7,55 +7,187 @@ on:
 
 env:
   DOCKER_REPO: astronautjon/is436
-  COMPOSE_FILE: src/docker-compose.yml
+  SINGLE_TAG_PREFIX: single
 
 jobs:
-  push_to_registry:
+  build-and-push-single:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
-      - name: Check out the repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set TAG
         run: echo "TAG=${{ github.run_number }}" >> $GITHUB_ENV
 
-      - name: Login to Docker Hub
+      - name: Prepare single-container build context
+        run: |
+          set -euo pipefail
+          BUILD_DIR="$(pwd)/single-build"
+          rm -rf "$BUILD_DIR"
+          mkdir -p "$BUILD_DIR/app"
+          # copy backend source (do not modify repo files)
+          cp -a src/backend/. "$BUILD_DIR/app/"
+
+          # copy any mysql init.sql from compose-mounted path if present
+          if [ -f src/mysql/init.sql ]; then
+            mkdir -p "$BUILD_DIR/mysql-init"
+            cp src/mysql/init.sql "$BUILD_DIR/mysql-init/init.sql"
+          fi
+
+          # Create a Dockerfile that installs MySQL server and Node and runs both via supervisord.
+          cat > "$BUILD_DIR/Dockerfile" <<'DOCKERFILE'
+FROM debian:bookworm-slim
+
+# avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# install prerequisites: mysql-server, curl (for node install), python for pip, supervisor
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    gnupg2 \
+    curl \
+    lsb-release \
+    supervisor \
+    gosu \
+    procps \
+    build-essential \
+    libssl-dev \
+    wget \
+    tar \
+    xz-utils \
+    # mysql server packages
+    default-mysql-server \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 18 (Debian repo may have old node; use NodeSource)
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+ && apt-get update \
+ && apt-get install -y nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# create directories
+RUN mkdir -p /usr/src/app /var/lib/mysql /docker-entrypoint-initdb.d /var/log/supervisor
+
+WORKDIR /usr/src/app
+
+# copy app into image
+COPY app/ /usr/src/app/
+
+# copy init sql if present
+COPY mysql-init/ /docker-entrypoint-initdb.d/
+
+# ensure node deps installed (package.json must be in repo backend)
+RUN if [ -f package.json ]; then npm install --omit=dev --no-audit --no-fund; fi
+
+# supervisord config to run both mysqld and node
+RUN mkdir -p /etc/supervisor/conf.d
+RUN printf "[supervisord]\nnodaemon=true\n\n" > /etc/supervisor/supervisord.conf
+RUN cat > /etc/supervisor/conf.d/services.conf <<'SUPERVISOR'
+[program:mysqld]
+command=/usr/bin/mysqld_safe
+autorestart=true
+stdout_logfile=/var/log/supervisor/mysqld.log
+stderr_logfile=/var/log/supervisor/mysqld_err.log
+
+[program:nodeapp]
+command=node server.js
+directory=/usr/src/app
+autorestart=true
+stdout_logfile=/var/log/supervisor/nodeapp.log
+stderr_logfile=/var/log/supervisor/nodeapp_err.log
+SUPERVISOR
+
+# expose both ports
+EXPOSE 3000 3306
+
+# ensure mysql datadir has correct permissions at runtime and then start supervisord
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+DOCKERFILE
+
+          # Create docker-entrypoint.sh which initializes mysql if needed then runs CMD
+          cat > "$BUILD_DIR/docker-entrypoint.sh" <<'ENTRY'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ensure mysql datadir exists and has correct ownership
+DATADIR="/var/lib/mysql"
+if [ ! -d "$DATADIR/mysql" ] || [ -z "$(ls -A $DATADIR 2>/dev/null)" ]; then
+  echo "Initializing MySQL datadir..."
+  mkdir -p "$DATADIR"
+  chown -R mysql:mysql "$DATADIR"
+  # Use mysqld --initialize-insecure to create initial DB without root password, then run SQL init scripts
+  mysqld --initialize-insecure --user=mysql --datadir="$DATADIR"
+fi
+
+# Start a temporary mysqld to run init scripts if any
+mysqld_safe --datadir="$DATADIR" &
+
+# wait for mysql socket to be ready
+echo "Waiting for MySQL to start..."
+timeout=30
+while ! mysqladmin ping -h 127.0.0.1 --silent; do
+  sleep 1
+  timeout=$((timeout-1))
+  if [ "$timeout" -le 0 ]; then
+    echo "MySQL failed to start in time"
+    exit 1
+  fi
+done
+
+# run SQL init scripts if present
+if [ -d /docker-entrypoint-initdb.d ]; then
+  for f in /docker-entrypoint-initdb.d/*; do
+    if [ -f "$f" ]; then
+      echo "Running init script: $f"
+      mysql < "$f" || true
+    fi
+  done
+fi
+
+# stop the temporary mysqld started above and let supervisor start it
+mysqladmin shutdown -uroot || true
+
+# finally handoff to CMD (supervisord) which will start mysqld and node app
+exec "$@"
+ENTRY
+
+          # copy mysql-init (may be empty) into build dir already done above
+          ls -la "$BUILD_DIR"
+
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build services (docker compose)
-        run: |
-          docker compose -f "${{ env.COMPOSE_FILE }}" build --pull
-
-      - name: Tag & push into single repo (is436)
-        run: |
-          set -euo pipefail
-
-          # list services here (adjust if your compose uses different service names)
-          SERVICES="backend frontend"
-
-          for svc in $SERVICES; do
-            # get the image reference built by compose (image ID or image name)
-            IMG_REF="$(docker compose -f "${{ env.COMPOSE_FILE }}" images -q "${svc}")"
-            if [ -z "$IMG_REF" ]; then
-              echo "ERROR: service '$svc' not found or not built by compose."
-              exit 1
-            fi
-
-            # tags we will create in the single repo
-            TAGGED="${{ env.DOCKER_REPO }}:${svc}-${TAG}"
-            LATEST_TAG="${{ env.DOCKER_REPO }}:${svc}-latest"
-
-            # create tags and push
-            docker tag "$IMG_REF" "$TAGGED"
-            docker tag "$IMG_REF" "$LATEST_TAG"
-
-            docker push "$TAGGED"
-            docker push "$LATEST_TAG"
-
-            echo "Pushed $TAGGED and $LATEST_TAG"
-          done
+      - name: Build single image (Node + MySQL) and push
         env:
           TAG: ${{ env.TAG }}
+          DOCKER_REPO: ${{ env.DOCKER_REPO }}
+          BUILD_DIR: ${{ github.workspace }}/single-build
+        run: |
+          set -euo pipefail
+          cd "$BUILD_DIR"
+          # Build and push using docker buildx (multi-arch omitted because mysql complexity)
+          docker buildx create --use --driver docker-container || true
+          docker buildx build \
+            --load \
+            --tag "${DOCKER_REPO}:${SINGLE_TAG_PREFIX}-${TAG}" \
+            --tag "${DOCKER_REPO}:single-latest" \
+            .
+
+          # login already done by action; push via docker push
+          docker push "${DOCKER_REPO}:${SINGLE_TAG_PREFIX}-${TAG}"
+          docker push "${DOCKER_REPO}:single-latest"
+
+      - name: Output info
+        run: |
+          echo "Single image pushed to: ${DOCKER_REPO}:single-${TAG} and ${DOCKER_REPO}:single-latest"
