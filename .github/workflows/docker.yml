@@ -1,116 +1,28 @@
-name: Build (compose-equivalent) and push images to Docker Hub
+name: Docker Compose Build and Up
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  DOCKER_REPO: astronautjon/is436
-  COMPOSE_FILE: src/docker-compose.yml
-  BACKEND_CONTEXT: src/backend
-  BACKEND_DOCKERFILE: src/backend/Dockerfile
-
-permissions:
-  contents: read
-
 jobs:
-  build-and-push:
+  compose-up:
     runs-on: ubuntu-latest
     steps:
-      - name: "Checkout repo"
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: "Set TAG (run number)"
-        run: echo "TAG=${{ github.run_number }}" >> $GITHUB_ENV
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: "Sanity: show file layout around src/"
-        run: |
-          echo "PWD: $(pwd)"
-          ls -la
-          echo "Listing src/:"
-          ls -la src || true
-          echo "Listing src/backend/:"
-          ls -la src/backend || true
-
-      - name: "Fail early if backend Dockerfile missing"
-        run: |
-          if [ ! -f "${{ env.BACKEND_DOCKERFILE }}" ]; then
-            echo "::error::Backend Dockerfile not found at ${{ env.BACKEND_DOCKERFILE }}. Aborting."
-            exit 1
-          fi
-
-      - name: "Log in to Docker Hub"
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: "Set up QEMU and Buildx (for reliable builds)"
-        uses: docker/setup-buildx-action@v3
-
-      - name: "Build backend image directly (reliable in CI)"
-        env:
-          DOCKER_REPO: ${{ env.DOCKER_REPO }}
-          TAG: ${{ env.TAG }}
+      - name: Build and run compose services
+        working-directory: src
         run: |
-          set -euo pipefail
-          echo "Building backend from context: ${{ env.BACKEND_CONTEXT }} using Dockerfile: ${{ env.BACKEND_DOCKERFILE }}"
-          # create a local temporary tag for the built image
-          TEMP_TAG="${DOCKER_REPO}:backend-temp-${TAG}"
-          docker buildx build \
-            --load \
-            --file "${{ env.BACKEND_DOCKERFILE }}" \
-            --tag "${TEMP_TAG}" \
-            "${{ env.BACKEND_CONTEXT }}"
-
-          echo "Built backend image: ${TEMP_TAG}"
-          # show image details for debugging
-          docker images --no-trunc | grep "${DOCKER_REPO}" || true
-
-      - name: "Pull db base image (mysql:8.0)"
-        run: |
-          docker pull mysql:8.0
-          docker images mysql:8.0 || true
-
-      - name: "Tag & push images into single Docker Hub repo"
-        shell: bash
-        env:
-          DOCKER_REPO: ${{ env.DOCKER_REPO }}
-          TAG: ${{ env.TAG }}
-        run: |
-          set -euo pipefail
-
-          # backend: re-tag temp image into target repo/tags and push
-          TEMP_TAG="${DOCKER_REPO}:backend-temp-${TAG}"
-          TARGET_TAG="${DOCKER_REPO}:backend-${TAG}"
-          TARGET_LATEST="${DOCKER_REPO}:backend-latest"
-
-          echo "Tagging ${TEMP_TAG} -> ${TARGET_TAG} and ${TARGET_LATEST}"
-          docker tag "${TEMP_TAG}" "${TARGET_TAG}"
-          docker tag "${TEMP_TAG}" "${TARGET_LATEST}"
-
-          echo "Pushing ${TARGET_TAG} ..."
-          docker push "${TARGET_TAG}"
-          echo "Pushing ${TARGET_LATEST} ..."
-          docker push "${TARGET_LATEST}"
-
-          # db: pull official image already done; tag and push
-          DB_SRC="mysql:8.0"
-          DB_TARGET_TAG="${DOCKER_REPO}:db-${TAG}"
-          DB_TARGET_LATEST="${DOCKER_REPO}:db-latest"
-
-          echo "Tagging ${DB_SRC} -> ${DB_TARGET_TAG} and ${DB_TARGET_LATEST}"
-          docker tag "${DB_SRC}" "${DB_TARGET_TAG}"
-          docker tag "${DB_SRC}" "${DB_TARGET_LATEST}"
-
-          echo "Pushing ${DB_TARGET_TAG} ..."
-          docker push "${DB_TARGET_TAG}"
-          echo "Pushing ${DB_TARGET_LATEST} ..."
-          docker push "${DB_TARGET_LATEST}"
-
-      - name: "Summary"
-        run: |
-          echo "Images pushed to ${DOCKER_REPO}:"
-          echo " - ${DOCKER_REPO}:backend-${TAG} and ${DOCKER_REPO}:backend-latest"
-          echo " - ${DOCKER_REPO}:db-${TAG} and ${DOCKER_REPO}:db-latest"
+          docker compose build
+          docker compose up -d
