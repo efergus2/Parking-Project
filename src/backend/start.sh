@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-# Start MySQL service in the background
+# Start MariaDB service in the background
 service mysql start
 
-# Wait for MySQL to be ready
-echo "Waiting for MySQL to initialize..."
+# Wait for MariaDB to initialize
+echo "Waiting for MariaDB to initialize..."
 until mysqladmin ping --silent; do
   sleep 2
 done
@@ -21,4 +21,3 @@ mysql parkingdb < /init.sql
 
 # Start Node server
 node server.js
-
