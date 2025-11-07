@@ -24,7 +24,7 @@ jobs:
       # 3. Build Docker image
       - name: Build Docker image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/is436:latest ./backend
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/is436:latest ./src
 
       # 4. Push Docker image to DockerHub
       - name: Push Docker image
