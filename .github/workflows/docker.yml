@@ -29,4 +29,4 @@ jobs:
       # 4. Push Docker image to DockerHub
       - name: Push Docker image
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/is436:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/is436_GroupB:latest
