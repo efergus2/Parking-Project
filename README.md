@@ -177,15 +177,6 @@ jobs:
 
 ------------------------------------------------------------------------
 
-# Future Enhancements
-
--   API endpoints\
--   IoT sensor integration\
--   Admin dashboard\
--   Forecasting & analytics
-
-------------------------------------------------------------------------
-
 # Troubleshooting
 
 ### Safe Mode Error
