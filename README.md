@@ -1,12 +1,12 @@
 # Parking Lot Project
 
-IS436 Team B --- Campus Smart Parking System Prototype\
+IS436 Team B --- Campus Smart Parking System Prototype
 Database-driven system for managing, monitoring, and publishing
 real-time parking availability.
 
-[Parking Database Schema](#database-schema) •\
-[Docker Deployment Workflow](#docker-deployment-workflow) •\
-[System Usage](#system-usage) •\
+[Parking Database Schema](#database-schema) •
+[Docker Deployment Workflow](#docker-deployment-workflow) •
+[System Usage](#system-usage) •
 [Setup Instructions](#setup-instructions)
 
 ------------------------------------------------------------------------
@@ -38,7 +38,7 @@ real-time parking availability.
 # Overview
 
 This project is the prototype Campus Smart Parking Management System
-built for **IS436 Team B**.\
+built for **IS436 Team B**.
 It stores parking lot information, user accounts, and simulated IoT
 sensor data to track real-time availability on campus.
 
@@ -49,10 +49,10 @@ and automated containerized deployment workflows.
 
 # Core Features
 
--   Single-table parking availability model\
--   Real-time simulation of IoT sensor updates\
--   Docker-hosted database environment\
--   GitHub Actions workflow for automatic Docker Hub deployment\
+-   Single-table parking availability model
+-   Real-time simulation of IoT sensor updates
+-   Docker-hosted database environment
+-   GitHub Actions workflow for automatic Docker Hub deployment
 -   Easy integration with dashboards, mobile apps, or kiosks
 
 ------------------------------------------------------------------------
@@ -71,8 +71,8 @@ and automated containerized deployment workflows.
 ## Conceptual Model
 
 -   **One row = one parking lot**
--   **capacity** = total spaces\
--   **open_spaces** = available spaces\
+-   **capacity** = total spaces
+-   **open_spaces** = available spaces
 -   **note** = lot classification
 
 ------------------------------------------------------------------------
