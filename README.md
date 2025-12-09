@@ -29,7 +29,6 @@ real-time parking availability.
 -   [Docker Deployment Workflow](#docker-deployment-workflow)
     -   [GitHub Actions Pipeline](#github-actions-pipeline)
     -   [Pulling the Image](#pulling-the-image)
--   [Future Enhancements](#future-enhancements)
 -   [Troubleshooting](#troubleshooting)
 -   [License](#license)
 
