@@ -1,5 +1,6 @@
 # Parking Lot Project
 
+
 IS436 Team B --- Campus Smart Parking System Prototype
 Database-driven system for managing, monitoring, and publishing
 real-time parking availability.
